@@ -157,13 +157,20 @@ sub Util_convertLambdaExpressionToCSVForm
 {
     my ( $lambdaExpression ) = $_[0];
 
-    my @parts = split(/(\=|\>|\<)/,$lambdaExpression,2);
-    my $relationalOperator = $1;
-    $relationalOperator = "="; $improveThis = 1;
-    my ($name,$type) = split(/:/,$parts[0]);
-    my $CSVform = "$type,$name,$relationalOperator,$parts[1]";
+    my $CSVForm = "";
     
-    return
+    my $relationalOperator = "\=";
+    if ( $lambdaExpression =~ /\~/)
+    {
+		$relationalOperator = "\~";
+	}
+	my @parts = split(/$relationalOperator/,$lambdaExpression,2);
+	
+    my ($name,$type) = split(/:/,$parts[0]);
+    
+    $CSVForm = $type . ", " . $name . "," . $relationalOperator . "," . "\"" . $parts[1] . "\"" ;
+     
+    return $CSVForm;
 }
 
 

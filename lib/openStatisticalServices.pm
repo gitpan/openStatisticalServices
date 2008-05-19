@@ -24,10 +24,15 @@ our @EXPORT = qw(
 	CASL_getSetOfEquations
 	CASL_getSubExpression
 	CASL_getVector
+	Util_convertToLambdaExpression
+	Util_convertLambdaExpressionToCSVForm
+	Util_convertNONMEMInputFileToCSVForm
+	Util_convertDirectoryOfNONMEMInputFilesToCSVForm
+	Util_convertDirectoryOfNONMEMInputFilesToStatML
 
 );
 
-our $VERSION = '0.01';
+our $VERSION = '0.012';
 
 # Preloaded methods go here.
 
@@ -97,16 +102,821 @@ sub hoot {
 
 #---------------------------------------------------------------------------------
 
-my $improveThis; #sign for me to improve some aspect of coding.
+my $improveThis; #this is an indication that I need to improve some aspect of coding.
 
 #---------------------------------------------------------------------------------
 #package OpenStatisticalServices::Util
 
 
+sub Util_convertDirectoryOfNONMEMInputFilesToStatML
+{
+    my ( $inputsDirectory,$outputsDirectory ) = @_;
+    
+    my $oldFileInputSeparator = $/;
+    
+    $/ = "\n";
+    
+    opendir(RUNDIR,$inputsDirectory) or die("Could not open run directory $inputsDirectory\n");
+    my @files = grep ( /\.txt/i, readdir(RUNDIR));
+    close(READDIR);
+    
+    foreach my $fileIn ( @files )
+    {
+	    print $fileIn,"\n";
+        my $fileOut = $fileIn;
+        $fileOut =~ s/\.txt/\.xml/g;
+        Util_convertNONMEMInputFileToStatML("$inputsDirectory/$fileIn",$outputsDirectory, "$fileOut");
+    }
+    
+    $/ = $oldFileInputSeparator;
+    
+}
+
+
+sub Util_convertNONMEMInputFileToStatML
+{
+    my ( $file, $outputsDirectory, $fileOut ) = @_;
+
+    my @overallDatasetTypes = ("primary","secondary");
+    my @overallFieldTypes = ("observations","inputs");
+    
+	open (INPUTFILE,"$file") or die ("Could not open input file $file\n");
+	
+    my @data = <INPUTFILE>;
+    chomp @data;
+    close(INPUTFILE);
+	
+    $| = 1;
+	
+    my @dataLinesSplitRefs = ();
+    my @firstLineForSubject;
+    my $iSubject = -1;
+
+    $data[0]	 =~ s/^[\s#]+//g;
+    my @headerHere = split(/\s+|,/,$data[0]);
+
+    my $items = scalar(@headerHere);
+	
+    my $iEvId = 0;
+    my $iDose = 0;
+    my $iRate = 0;
+    my @inputs = ();
+
+    my @outputs = ();
+    my @rates = ();
+    my @excluded = ();
+    my @fieldLengths = ();
+    my @isVector = ();
+    my @fieldTypes = ();
+    my @attributeStringsForSubjects = ();
+    my @dataIsDifferentForIndividuals = ();
+
+    for ( my $iHeader = 0; $iHeader < $items; $iHeader++ )
+    {
+	    $isVector[$iHeader] = 0;
+	    $excluded[$iHeader] = 0;
+	    $fieldTypes[$iHeader] = 'fn(AMT) ';
+	    $fieldLengths[$iHeader] = 3;
+	    $dataIsDifferentForIndividuals[$iHeader] = 0;
+
+	    if ( $headerHere[$iHeader]    =~ /EVID.*/i )
+	    {
+		    $iEvId = $iHeader;
+		    $excluded[$iHeader] = 1;
+	    }
+	    elsif ( $headerHere[$iHeader]    =~ /MDV.*/i )
+	    {
+		    $excluded[$iHeader] = 1;
+	    }
+	    elsif ( $headerHere[$iHeader] =~ /TIME.*/i )
+	    {
+		    $fieldTypes[$iHeader] = "indepen ";
+		    $isVector[$iHeader] = 1;
+		    push(@inputs, $iHeader);
+		    push(@outputs,$iHeader);
+	    }
+	    elsif ( $headerHere[$iHeader] =~ /AMT.*/i )
+	    {
+		    $iDose = $iHeader;
+		    $fieldTypes[$iHeader] = "ind(TIME)";
+		    push(@inputs,$iDose);
+	    }
+	    elsif ( $headerHere[$iHeader] =~ /RATE.*/i )
+	    {
+		    $iRate = $iHeader;
+		    $fieldTypes[$iHeader] = "ind(TIME)";
+		    push(@inputs,$iRate);
+		    $dataIsDifferentForIndividuals[$iHeader] = 1;
+	    }
+	    elsif ( $headerHere[$iHeader] =~ /LNDV.*/i )
+	    {
+		    $fieldTypes[$iHeader] = "fn(DV)";
+		    push(@outputs,$iHeader);
+	    }
+	    else
+	    {
+		    push(@outputs,$iHeader);
+	    }
+    }
+	
+    my $iMaxSubject = 0;
+    my $iMaxLines = 0;
+    my $zeroSubject = 0;
+	
+    for ( my $i = 0; $i <= $#data; $i++ )
+    {
+	    my @eachLine;
+	    next unless $data[$i] =~ /\w/;
+		
+	    $data[$i]	 =~ s/^[\s#]+//g;
+	    @eachLine	 = split(/\s+|,/,$data[$i]);
+	    $dataLinesSplitRefs[$iMaxLines] = \@eachLine;
+	    if ( $eachLine[0] eq '0' )
+	    {
+		    if ( $zeroSubject == 0 )
+		    {
+			    $zeroSubject = $iMaxSubject+1;
+		    }
+		    $eachLine[0] = $zeroSubject;
+	    }
+	    if ( $eachLine[$iEvId] eq '2' )
+	    {
+		    $eachLine[$iEvId] = 0;
+	    }
+	    my $iSubjectHere = $eachLine[0];
+	    if ( $iSubject ne $iSubjectHere )
+	    {
+		    $iSubject = $iSubjectHere;
+		    push(@firstLineForSubject,$iMaxLines);
+	    }
+	    $dataLinesSplitRefs[$iMaxLines] = \@eachLine;
+	    if ( $iSubject > $iMaxSubject )
+	    {
+		    $iMaxSubject = $iSubject;
+	    }
+	    $iMaxLines++;
+    }
+
+    my @subjects;
+    for ( my $iSubject1 = 1; $iSubject1 <= $iMaxSubject; $iSubject1++)
+    {
+	    $subjects[$iSubject1] = $iSubject1;
+    }
+	
+    push ( @firstLineForSubject, $iMaxLines);
+		
+    my $lastLineRef = $dataLinesSplitRefs[$#dataLinesSplitRefs];
+    my @lastLine    = @$lastLineRef;
+		
+    my @firstDoseForIndividuals = ();
+
+    for ( my $iEventId = 0; $iEventId <= 1; $iEventId++ )
+    {
+	    for ( my $id = 1; $id <= $iMaxSubject; $id++)
+	    {
+		    for ( my $iField = 0; $iField < $items; $iField++ )
+		    {
+			    my $aName = $headerHere[$iField];
+			    $aName =~ s/\"//g;
+			    my $iFirstLine = $firstLineForSubject[$id];
+			    my $lineRef = $dataLinesSplitRefs[$iFirstLine];
+			    unless ( $lineRef =~ /ARRAY/)
+			    {
+				    print "Error at subject $id, field $iField, lineRef $lineRef \n";
+				    exit;
+			    }
+			    my @dataForLine    = @$lineRef;
+			    my @inputsHere = ($dataForLine[$iDose], $dataForLine[$iRate]);
+			    $firstDoseForIndividuals[$id-1] = \@inputsHere;
+			    my $iLastLine = $firstLineForSubject[$id+1]-1;
+			    my $numItems = $iLastLine - $iFirstLine + 1;
+			    my @dataList = ();
+
+			    my $value = "";
+			    for ( my $iLine = $iFirstLine; $iLine <= $iLastLine; $iLine++ )
+			    {
+				    my $lineNextRef = $dataLinesSplitRefs[$iLine];
+				    my @dataForNextLine    = @$lineNextRef;
+				    next unless ($dataForNextLine[$iEvId] eq $iEventId);
+
+				    my $datum = $dataForNextLine[$iField];
+				    if ( $value eq "" )
+				    {	
+					    $value = $datum;
+					    next;	
+				    }
+				    elsif ( $value ne $datum)
+				    {
+					    $isVector[$iField] = 1;
+				    }
+				    my $len = length($datum);
+				    if ( $len > $fieldLengths[$iField])
+				    {
+					    $fieldLengths[$iField] = $len;
+				    }
+			    }
+		    }
+	    }
+    }
+
+    my $recordsPerSubject = $firstLineForSubject[2] - $firstLineForSubject[1];
+    for ( my $iEventId = 0; $iEventId <= 1; $iEventId++ )
+    {
+	    for ( my $iField = 0; $iField < $items; $iField++ )
+	    {
+		    for ( my $iLine = 1; $iLine <= $recordsPerSubject; $iLine++ )
+		    {
+			    my $value = "";
+
+			    for ( my $iSubject = 1; $iSubject <= $iMaxSubject; $iSubject++ )
+			    {
+				    my $i = $iLine + ($iSubject-1) * $recordsPerSubject;
+				    my $lineRef = $dataLinesSplitRefs[$i];
+				    unless ( $lineRef =~ /ARRAY/)
+				    {
+					    $dataIsDifferentForIndividuals[$iField] = 1;
+					    last;
+				    }
+				    my @data    = @$lineRef;
+				    next unless ($data[$iEvId] eq $iEventId);
+
+				    my $datum = $data[$iField];
+				    if ( $value eq "" )
+				    {	
+					    $value = $datum;
+					    next;	
+				    }
+				    elsif ( $value ne $datum)
+				    {
+					    $dataIsDifferentForIndividuals[$iField] = 1;
+					    last;
+				    }
+			    }
+			    last if ( $dataIsDifferentForIndividuals[$iField]);
+		    }
+	    }
+    }
+	
+	print "Writing to $outputsDirectory/$fileOut.tab\n";
+    open(IFILETAB,">$outputsDirectory/$fileOut.tab" ) or die("Count not open data file\n");
+    print IFILETAB join("\t",@headerHere),"\n";
+	
+    for ( my $i = 1; $i <= $#dataLinesSplitRefs; $i++ )
+    {
+	    my @data = @{$dataLinesSplitRefs[$i]};
+	    for ( my $j = 0; $j < scalar(@data);$j++)
+	    {
+		    if ( $data[$j] eq "." )
+		    {
+			    $data[$j] = "nan";
+		    }
+	    }
+	    print IFILETAB join("\t",@data),"\n";
+    }
+    close(IFILETAB);
+    		
+    open(IFILE,">$outputsDirectory/$fileOut" ) or die("Count not open data file $file.xml for outputs in $outputsDirectory\n");
+    #*IFILE = *STDOUT;
+	
+    print IFILE <<TOP;
+    <?xml version="1.0" encoding="ISO-8859-1"?>
+    <statml xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="statml.xsd">
+TOP
+
+    for ( my $iDatasetType = 0; $iDatasetType <=1; $iDatasetType++ )
+    {
+        my $indentForDataset = "";
+        if ( $iDatasetType == 1 )
+        {
+	        $indentForDataset = "    ";
+	        print IFILE q(<Secondary Type="terse">),"\n";
+        }
+    	
+        for ( my $iEventType = 1; $iEventType >= 0; $iEventType-- )
+        {
+	        my @fields;
+	        if ( $iEventType eq 1 )
+	        {
+		        @fields = @inputs;	
+	        }
+	        else
+	        {
+		        @fields = @outputs;
+	        }
+
+	        print IFILE $indentForDataset,"<", $overallFieldTypes[$iEventType], ">\n";
+	        my $iNumHereLast = 0;
+    		
+	        my $doCompress = 0;
+    		
+	        for ( my $iFieldInList = 0 ; $iFieldInList < scalar(@fields); $iFieldInList++ )
+	        {
+
+		        my $iField = $fields[$iFieldInList];
+		        my $aName = $headerHere[$iField];
+
+		        next if ( $aName ne "TIME" && $iEventType == 1 && ( $iDatasetType == $dataIsDifferentForIndividuals[$iField]));
+		        for ( my $id = 1; $id <= $iMaxSubject; $id++)
+		        {
+		            #Next is for vectors.
+			        next unless ( $isVector[$iField] == 1) || $iEventType == 1;
+    				
+			        last if ( $id > 1 && ! $dataIsDifferentForIndividuals[$iField] );
+    				
+			        $aName =~ s/\"//g;
+			        my $iFirstLine = $firstLineForSubject[$id];
+			        my $iLastLine  = $firstLineForSubject[$id+1]-1;
+    				
+			        my $numItems = $iLastLine - $iFirstLine + 1;
+			        my @dataList = ();
+    				
+			        my @dataHere;
+    			
+			        for ( my $i = $iFirstLine; $i <= $iLastLine; $i++ )
+			        {
+				        @dataHere = @{$dataLinesSplitRefs[$i]};
+				        my $iSubject = $dataHere[0];
+				        my $iEvent   = $dataHere[$iEvId];
+    					
+				        next if ( $iEvent ne $iEventType );
+
+				        my $datum = $dataHere[$iField];
+				        push(@dataList,$datum);
+			        }
+    				
+			        my $aLine = "";
+			        my $numHere = $#dataList+1;
+			        my $iFieldLength = $fieldLengths[$iField];
+			        if ( $iEventType == 0 )
+			        {
+				        $iFieldLength = 8;
+			        }
+    				
+			        #$aLine .= "\n";
+			        my $bNotFirst = 0;
+                    if ( $numHere > 1 )
+                    {
+	                    $aLine .= "\[ ";
+                    }
+
+			        for ( my $i = 0; $i <= $numHere; $i++ )
+			        {
+				        my $datum = $dataList[$i];
+    					
+    					if ( defined($datum))
+    					{
+				            my $strlen = $iFieldLength - length($datum)+1;
+				            if ( $strlen < 1 )
+				            {
+					            $strlen = 1;
+				            }
+				            if ( $doCompress & ( $bNotFirst && ! $isVector[$iField]))
+				            {
+					            $datum = ' ' x length($datum);
+				            }
+				            else
+				            {
+					            $bNotFirst = 1;
+				            }
+				            $aLine .= " " x $strlen;
+				            $aLine .= $datum;
+				        }
+			        }
+                    if ( $numHere > 1 )
+                    {
+	                    $aLine .= "\] ";
+                    }
+    				
+			        if ( $iNumHereLast == 0 )
+			        {
+				        $iNumHereLast = $numHere;
+			        }
+			        if ( $iNumHereLast != $numHere )
+			        {
+				        #print IFILE "\n";
+				        $iNumHereLast = $numHere;
+			        }
+
+			        print IFILE
+				        q(	<vector );
+
+			        my $aName = $headerHere[$iField];
+			        my $iPaddingForName = 4 - length($aName);
+			        print IFILE "name", 
+				        "=",
+				        q("),
+				        $aName,
+				        ' ' x $iPaddingForName,
+				        q(" );
+
+			        my $idToUse = $id;
+			        if ( ! $dataIsDifferentForIndividuals[$iField] )
+			        {
+				        $idToUse = "*";
+			        }
+			        my $iPaddingForID = 3 - length($idToUse);
+    				
+			        print IFILE "ID", 
+				        "=",
+				        q("),
+				        $idToUse,
+				        ' ' x $iPaddingForID,
+				        q(" );
+    				
+			        my $aString = "";
+			        for ( my $iField1 = 0; $iField1 < scalar(@headerHere); $iField1++ )
+			        {
+				        next if $isVector[$iField1];
+				        next if $excluded[$iField1];
+				        next if $dataHere[$iField1] eq ".";
+				        my $aName = $headerHere[$iField1];
+				        my $iPaddingForName  = 4 - length($aName);
+				        my $iPaddingForValue = $fieldLengths[$iField1] - length($dataHere[$iField1]);
+
+				        $aString .=  $aName .
+					        "=" .
+					        q(") .
+					        $dataHere[$iField1] .
+					        ' ' x $iPaddingForValue .
+					        q(" );
+			        }
+			        $attributeStringsForSubjects[$id] = $aString;
+    				
+			        if ( 0 )
+			        {
+				        if ( $dataIsDifferentForIndividuals[$iField])
+				        {
+					        print IFILE $aString;
+				        }
+				        elsif ( $iEventType == 0 )
+				        {
+					        print IFILE ' ' x length($aString);
+				        }
+			        }
+			        my $iPadding = 3 - length($numHere);
+			        my $iPaddingForType = 8 - length($fieldTypes[$iField]);
+			        print IFILE
+				        q(type="),
+				        $fieldTypes[$iField],
+				        ' ' x $iPaddingForType,
+				        q(" ),
+				        q(format="float" dim="), 
+				        $numHere, 
+				        ' ' x $iPadding,
+				        q(");
+    					
+			        print IFILE
+				        q(>),
+				        $aLine;
+
+			        print IFILE 
+				        "	</vector>\n";
+    		
+    				
+			        unless ( $dataIsDifferentForIndividuals[$iField])
+			        {
+				        if ( $iEventType > 0 && $iDatasetType == 1)
+				        {
+    				
+					        for ( my $iDatum = 0; $iDatum <= 1; $iDatum++)
+					        {
+    					
+						        my $inputField = $iDose;
+						        if ( $iDatum > 0 )
+						        {
+							        if ( $iRate == 0 )
+							        {
+								        next;
+							        }
+
+							        $inputField = $iRate;
+						        }
+						        my $aLine = Util_getNONMEMDataLine(\@firstDoseForIndividuals,$iDatum,$iFieldLength);
+						        my $numHere = scalar(@firstDoseForIndividuals);
+    									
+						        my $iFieldLength = $fieldLengths[$iDose];
+    							
+						        if ( $iNumHereLast == 0 )
+						        {
+							        $iNumHereLast = $numHere;
+						        }
+						        if ( $iNumHereLast != $numHere )
+						        {
+							        print IFILE "\n";
+							        $iNumHereLast = $numHere;
+						        }
+						        print IFILE
+							        q(	<vector );
+
+						        my $aName = $headerHere[$inputField];
+						        my $iPadding = 4 - length($aName);
+						        print IFILE "name", 
+							        "=",
+							        q("),
+							        $aName,
+							        ' ' x $iPadding,
+							        q(" ),
+							        q(ID="*  " );
+    	
+						        my $iPaddingHere = 3 - length($numHere);
+						        my $iPaddingForField = 8 - length($fieldTypes[$inputField]);
+						        print IFILE
+							        q(type="),
+							        $fieldTypes[$inputField],
+							        ' ' x $iPaddingForField,
+							        q(" ),
+							        q(format="float" dim="), 
+							        $numHere,
+							        ' ' x $iPaddingHere , 
+							        q(");
+
+						        print IFILE
+							        q(>),
+							        $aLine;
+
+						        print IFILE 
+							        "	</vector>\n";
+    								
+						        if ( 0 )
+						        {
+							        open(CSVFILE,">$file.inputs.csv" ) or die("Count not open csv file\n");
+							        print CSVFILE $aName,
+    		
+							        my $iPadding = 3 - length($numHere);
+    								
+							        print CSVFILE
+								        q(format="float" dim="), 
+								        $numHere,
+								        ' ' x $iPadding, 
+								        q(");
+
+							        print CSVFILE
+								        q(>),
+								        $aLine;
+
+							        print CSVFILE 
+								        "	</vector>\n";
+						        }			
+
+					        }
+				        }
+			        }
+		        }
+	        }
+	        print IFILE "$indentForDataset</", $overallFieldTypes[$iEventType], ">\n\n";
+        }
+	
+        print IFILE $indentForDataset, q(<attributesSet field="ID">),"\n";
+        foreach my $iSubjectAttributes ( @subjects )
+        {
+            if ( defined($iSubjectAttributes)) #improve this
+            {
+	            if (  $attributeStringsForSubjects[$iSubjectAttributes] ne "" )
+	            {
+		            print IFILE "	<attributes         $attributeStringsForSubjects[$iSubjectAttributes] ></attributes>\n";
+	            }
+	        }
+        }
+        print IFILE "$indentForDataset</attributesSet>\n\n";
+        print IFILE "$indentForDataset<constraints>\n";
+
+        print IFILE "	$indentForDataset<equation> TIME      >= 0               >  </equation>\n";
+        print IFILE "	$indentForDataset<equation> DV        >= 0               >  </equation>\n";
+
+        print IFILE "	$indentForDataset<equation> LNDV(TIME) = ln (DV(TIME))   >  </equation>\n";
+        print IFILE "	$indentForDataset<equation> DV(TIME)   = exp(LNDV(TIME)) >  </equation>\n";
+        print IFILE "	$indentForDataset<equation> DOSE(ID)   = AMT(ID)         >  </equation>\n";
+
+        print IFILE $indentForDataset,"</constraints>\n\n";
+        if ( $iDatasetType == 1 )
+        {
+            print IFILE <<MATHML;
+	
+    <expressions>
+        <expression type="string" name="AMT ">  AMT*(delta(0)+delta(72)+delta(96)+delta(120)+delta(144)+delta(168)+delta(192)+delta(216)) </expression>
+        <expression type="MathML">
+    <math xmlns='http://www.w3.org/1998/Math/MathML'>
+    <semantics>
+        <mrow xref='id27'>
+          <mi xref='id1'>AMT</mi>
+          <mo>ApplyFunction;</mo>
+          <mfenced>
+            <mrow xref='id26'>
+              <mrow xref='id4'>
+                <mi xref='id2'>delta;</mi>
+                <mo>ApplyFunction;</mo>
+                <mfenced>
+                  <mn xref='id3'>0</mn>
+                </mfenced>
+              </mrow>
+              <mo>+</mo>
+              <mrow xref='id7'>
+                <mi xref='id5'>delta;</mi>
+                <mo>ApplyFunction;</mo>
+                <mfenced>
+                  <mn xref='id6'>72</mn>
+                </mfenced>
+              </mrow>
+              <mo>+</mo>
+              <mrow xref='id10'>
+                <mi xref='id8'>delta;</mi>
+                <mo>ApplyFunction;</mo>
+                <mfenced>
+                  <mn xref='id9'>96</mn>
+                </mfenced>
+              </mrow>
+              <mo>+</mo>
+              <mrow xref='id13'>
+                <mi xref='id11'>delta;</mi>
+                <mo>ApplyFunction;</mo>
+                <mfenced>
+                  <mn xref='id12'>120</mn>
+                </mfenced>
+              </mrow>
+              <mo>+</mo>
+              <mrow xref='id16'>
+                <mi xref='id14'>delta;</mi>
+                <mo>ApplyFunction;</mo>
+                <mfenced>
+                  <mn xref='id15'>144</mn>
+                </mfenced>
+              </mrow>
+              <mo>+</mo>
+              <mrow xref='id19'>
+                <mi xref='id17'>delta;</mi>
+                <mo>ApplyFunction;</mo>
+                <mfenced>
+                  <mn xref='id18'>168</mn>
+                </mfenced>
+              </mrow>
+              <mo>+</mo>
+              <mrow xref='id22'>
+                <mi xref='id20'>delta;</mi>
+                <mo>ApplyFunction;</mo>
+                <mfenced>
+                  <mn xref='id21'>192</mn>
+                </mfenced>
+              </mrow>
+              <mo>+</mo>
+              <mrow xref='id25'>
+                <mi xref='id23'>delta;</mi>
+                <mo>ApplyFunction;</mo>
+                <mfenced>
+                  <mn xref='id24'>216</mn>
+                </mfenced>
+              </mrow>
+            </mrow>
+          </mfenced>
+        </mrow>
+        <annotation-xml encoding='MathML-Content'>
+          <apply id='id27'>
+            <ci id='id1'>AMT</ci>
+            <apply id='id26'>
+              <plus/>
+              <apply id='id4'>
+                <ci id='id2'>delta</ci>
+                <cn id='id3' type='integer'>0</cn>
+              </apply>
+              <apply id='id7'>
+                <ci id='id5'>delta</ci>
+                <cn id='id6' type='integer'>72</cn>
+              </apply>
+              <apply id='id10'>
+                <ci id='id8'>delta</ci>
+                <cn id='id9' type='integer'>96</cn>
+              </apply>
+              <apply id='id13'>
+                <ci id='id11'>delta</ci>
+                <cn id='id12' type='integer'>120</cn>
+              </apply>
+              <apply id='id16'>
+                <ci id='id14'>delta</ci>
+                <cn id='id15' type='integer'>144</cn>
+              </apply>
+              <apply id='id19'>
+                <ci id='id17'>delta</ci>
+                <cn id='id18' type='integer'>168</cn>
+              </apply>
+              <apply id='id22'>
+                <ci id='id20'>delta</ci>
+                <cn id='id21' type='integer'>192</cn>
+              </apply>
+              <apply id='id25'>
+                <ci id='id23'>delta</ci>
+                <cn id='id24' type='integer'>216</cn>
+              </apply>
+            </apply>
+          </apply>
+        </annotation-xml>
+        <annotation encoding='Maple'>AMT(delta(0)+delta(72)+delta(96)+delta(120)+delta(144)+delta(168)+delta(192)+delta(216))</annotation>
+      </semantics>
+    </math>
+   </expression>
+</expressions>
+
+MATHML
+
+	        print IFILE "</Secondary>\n\n";
+        }
+    }	
+
+    print IFILE q(<Secondary type="NONMEM">);
+    foreach my $line ( @data )
+    {
+	    print IFILE $line, "\n";
+    }
+    print IFILE q(</Secondary>),"\n";
+
+    print IFILE "</statml>\n";
+
+    close(IFILE);
+
+}
+
+sub Util_getNONMEMDataLine
+{
+    my ($firstDoseForIndividuals,$iDatum,$iFieldLength ) = @_;
+    my @firstDoseForIndividuals = @$firstDoseForIndividuals;
+    my $numHere = scalar(@firstDoseForIndividuals);
+    my $aLine = "";
+    if ( $numHere > 1 )
+    {
+	    $aLine .= "\[ ";
+    }
+    for ( my $i = 0; $i < $numHere; $i++ )
+    {
+	    my $datumRef = $firstDoseForIndividuals[$i];
+	    my (@datums) = @$datumRef;
+	    my $datum = $datums[$iDatum];
+	    my $strlen = $iFieldLength - length($datum)+1;
+	    if ( $strlen < 1 )
+	    {
+		    $strlen = 1;
+	    }
+	    $aLine .= " " x $strlen . $datum;
+    }
+    if ( $numHere > 1 )
+    {
+	    $aLine .= "\] ";
+    }
+
+    return ( $aLine);
+}
+
+sub Util_convertDirectoryOfNONMEMInputFilesToCSVForm
+{
+	my ( $inputDirectory, $outputDirectory ) = @_;
+
+    opendir(READDIR,"$inputDirectory");
+    my @files = grep { /\.txt/ } readdir(READDIR);
+    close(READDIR);
+
+    for my $fileIn ( <@files>)
+    {
+	    my $fileOut = $fileIn;
+	    $fileOut =~ s/txt/csv/g;
+
+	    print $fileIn, "\n";
+    	
+	    Util_convertNONMEMInputFileToCSVForm("$inputDirectory/$fileIn","$outputDirectory/$fileOut");
+    }
+
+}
+
+sub Util_convertNONMEMInputFileToCSVForm
+{
+
+	my ( $fileInput, $fileOutput ) = @_;
+
+    open(FILE,$fileInput) or die("Could not open file\n");
+    open(FILEOUTPUT,">$fileOutput") or die("Could not open output file\n");
+
+    my @data = <FILE>;
+    $data[0] =~ s/^[\s|\#]+//g;
+    $data[0] =~ s/\,/ /g;
+
+    my @headerHere = split(/\s+|\,/,$data[0]);
+
+    print FILEOUTPUT join(",",@headerHere), "\n";
+	for ( my $i = 1; $i <= $#data; $i++ )
+	{
+
+		my $line = $data[$i];
+		$line =~ s/^\s+|\#|\[|\]|\"|,/ /g;
+		my @dataHere = split(/\s+/,$line);
+		print FILEOUTPUT join(",",@dataHere),"\n";
+	}
+	
+    close(FILE);
+    close(FILEOUTPUT);
+
+}
+
 sub Util_isInList
 {
-    my $iFound = -1;
     my ( $variable, @variables ) = @_;
+    my $iFound = -1;
+
     my $iVar = 0;
     for my $testVar ( @variables )
     {
@@ -559,8 +1369,6 @@ sub NONMEM_getHypernormalizedVersionOfDatasets
 
     my $runsDirectory;
 
-    $/ = "\$";
-    
     my $writeNonmem;
     my $writeMaple;
     my $writeAsAlgebraicTheory;
@@ -620,10 +1428,13 @@ sub parseModelFile
 	    $modelType = "MATLAB";
 	    $runsDirectory = 'runs';
 	    $useWinBugs = 0;
+
     }
     else{
-	    $commentCharacter = ";";
+    
+    	$/ = "\$";
 
+	    $commentCharacter = ";";
 	    $assignmentOperator = "=";
 	    $leftParens = "\(";
 	    $rightParens = "\)";

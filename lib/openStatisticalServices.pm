@@ -19,16 +19,21 @@ our %EXPORT_TAGS = ( 'all' => [ qw(
 our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
 
 our @EXPORT = qw(
-	parseModelFile
-	CASL_getModel
-	CASL_getSetOfEquations
-	CASL_getSubExpression
-	CASL_getVector
 	Util_convertToLambdaExpression
 	Util_convertLambdaExpressionToCSVForm
 	Util_convertNONMEMInputFileToCSVForm
 	Util_convertDirectoryOfNONMEMInputFilesToCSVForm
 	Util_convertDirectoryOfNONMEMInputFilesToStatML
+	Util_getTypeOfDataFromStatML
+	CASL_getModel
+	CASL_getSetOfEquations
+	CASL_getExpression
+	CASL_getSubExpression
+	CASL_getVector
+	CASL_getSetOfVectors
+	Util_isInList
+	PK_regularizeFileName
+	parseModelFile
 
 );
 
@@ -833,6 +838,130 @@ MATHML
 
 }
 
+
+sub Util_getTypeOfDataFromStatML
+{
+    my $wordForTypeOfData = $_[0];
+    
+    my $toPrint = 0;
+
+    foreach my $file( <*.xml>)
+    {
+        open(FILE,$file) or die("Could not open file\n");
+
+        while(<FILE>)
+        {
+	        if ( /^\<\/$wordForTypeOfData/ )
+	        {
+		        $toPrint = 0;
+	        }
+
+	        if ( $toPrint )
+	        {
+		        print $file, $_;
+	        }
+	        if ( /^\<$wordForTypeOfData/ )
+	        {
+		        $toPrint = 1;
+	        }
+        }
+        close(FILE);
+    }
+}
+
+sub getCSVFromStatML
+{
+
+    my ($fileInput,$fileOutput) = $_;
+    
+    open(FILE,$fileInput) or die("Could not open file $fileInput\n");
+    open(FILEOUTPUT,">fileOutput") or die("Could not open file $fileOutput\n");
+  
+    print FILEOUTPUT "Modelname, FieldName, SubjectID, AsFunction, ElementType, Length, Vector\n";
+
+    while(<FILE>)
+    {
+        chomp;
+
+        my ($file,$attributeList,$vector) = split(/\<vector|\<\/vector|\>/);
+
+        $file =~ s/\_data.txt.*//g;
+
+        $attributeList =~ s/^\s+|\s+$|vector\s+//g;
+        my @attributes = split(/\"\s+/,$attributeList);
+
+        my @rhs = @attributes;
+        my @lhs = @attributes;
+
+        for ( my $i = 0; $i < scalar(@attributes); $i++)
+        {
+	        $rhs[$i] =~ s/.*=|\"//g;
+	        $lhs[$i] =~ s/=.*|//g;
+	        print FILEOUT ",", $rhs[$i];
+        }
+        
+        print FILEOUT q(,"),$vector, q(");
+        print FILEOUT "\n";
+
+    }
+    close(FILE);
+    close(FILEOUTPUT);
+}
+
+sub createCSVForConstraintsFromStatML
+{
+
+    my ($fileInput,$fileOutput) = $_;
+    
+    open(FILE,$fileInput) or die("Could not open file $fileInput\n");
+    open(FILEOUTPUT,">fileOutput") or die("Could not open file $fileOutput\n");
+
+    my $oldFile = "";
+    my $iNumber = 0;
+
+    print FILEOUTPUT "ModelName, Numer, Constraint\n";
+
+    while(<FILE>)
+    {
+        chomp;
+
+        my ($file,$equation,$extra) = split(/\<equation\>|[\>\s+]*\<\/equation\>/,$_,3);
+        my $attributeList = "";
+
+        $file =~ s/\_data.txt.*//g;
+
+        if ( $oldFile ne $file )
+        {
+	        $oldFile = $file ;
+	        $iNumber = 1;
+        }
+        	
+        print FILEOUTPUT $file, ", ", $iNumber++;
+
+        $attributeList =~ s/^\s+|\s+$|equation\s+//g;
+        my @attributes = split(/\"\s+/,$attributeList);
+
+        my @rhs = @attributes;
+        my @lhs = @attributes;
+
+        for ( my $i = 0; $i < scalar(@attributes); $i++)
+        {
+	        $rhs[$i] =~ s/.*=|\"//g;
+	        $lhs[$i] =~ s/=.*|//g;
+	        print ",", $rhs[$i];
+        }
+	    print FILEOUTPUT q(,"),$equation, q(");
+	    print FILEOUTPUT "\n";
+
+    }
+
+    close(FILE);
+    close(FILEOUTPUT);
+
+}
+
+
+
 sub Util_getNONMEMDataLine
 {
     my ($firstDoseForIndividuals,$iDatum,$iFieldLength ) = @_;
@@ -1100,7 +1229,7 @@ sub PK_regularizeFileName
 {
 	my ($newName, $extension ) = @_;
 
-	$newName =~ s/\.$extension$//ig;
+	$newName =~ s/$extension$//ig;
 	$newName = uc($newName);
 
 	$newName =~ s/(ALPHA|BETA|TLAG|KA|K12|VM|K21|TI|TK0|KA|CL|V1|V2|KM|EMAX|GAMMA|IMAX|BMAX|PK|PD|VK)/\.$1\./g;
@@ -1146,7 +1275,7 @@ sub PK_regularizeFileName
     
 	$newName = "${routing}_${compartments}${revisedParameters}${dosingType}";
 
-	$newName .= "\.$extension";
+	$newName .= "$extension";
 	$newName =~ s/\.\./\./g;
 	$newName = uc($newName);
 
@@ -1191,7 +1320,7 @@ sub NONMEM_doSetOfRuns
 			    {
 				     unless ( open(DATAFILE,"../data/$dataFileName"))
 				     {
-                   	    my $regularizedFilename = PK_regularizeFileName($dataFileName,"txt");
+                   	    my $regularizedFilename = PK_regularizeFileName($dataFileName,".data.txt");
         			    unless ( open(DATAFILE,"../data/$regularizedFilename"))
                         {
                             die("Could not open data file $dataFileName or $regularizedFilename for $file\n");
@@ -4983,7 +5112,7 @@ sub getNONMEMControlFiles
 			            {
 				             unless ( open(DATAFILE,"$dataDirectory/$dataFileName"))
 				             {
-				                my $revisedDataFileName = PK_regularizeFileName($dataFileName,"data");
+				                my $revisedDataFileName = PK_regularizeFileName($dataFileName,".data");
 				                open(DATAFILE,"$dataDirectory/$revisedDataFileName") or die("Could not open $dataDirectory/$revisedDataFileName for $inputFileNameComplete\n");
                             }
 			            }
@@ -8693,7 +8822,7 @@ sub writeAsAlgebraicTheory
         $DESFileName = $CASLOutputFileName;
         $DESFileName =~ s/.*\///ig;
         $DESFileName =~ s/both\_//ig;
-        $DESFileName = PK_regularizeFileName($DESFileName,"casl");
+        $DESFileName = PK_regularizeFileName($DESFileName,".casl");
 
         $DESFileName =~ s/\.casl//ig;
         $linesFound = copyFileToAlgebraicTheoryLines("$fileRoot$DESFileName.DES",$AlgebraicTheoryHandle,"DESMASTER");
@@ -10029,7 +10158,7 @@ sub CASL_getModel
 
 		my @arrayOfTrees = ();
 		my $arrayOfTreesRef = $abstractSyntaxTree{$initialField};
-		if ( $arrayOfTreesRef ne "" )
+		if ( defined($arrayOfTreesRef) && $arrayOfTreesRef ne "" )
 		{
 			@arrayOfTrees = @$arrayOfTreesRef;
 		}
@@ -10086,7 +10215,7 @@ sub CASL_getVector
 		
 		my $subFieldHere   = $tree{"mainField"};
 		
-		if ( $subField eq "" or $subFieldHere =~ /^$subField$/i )
+		if ( !defined($subField) or $subField eq "" or $subFieldHere =~ /^$subField$/i )
 		{
 		    $expression = $tree{"expression"};
 		    last;

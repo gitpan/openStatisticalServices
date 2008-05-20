@@ -24,20 +24,22 @@ our @EXPORT = qw(
 	Util_convertNONMEMInputFileToCSVForm
 	Util_convertDirectoryOfNONMEMInputFilesToCSVForm
 	Util_convertDirectoryOfNONMEMInputFilesToStatML
-	Util_getTypeOfDataFromStatML
+	Util_getSomeTypeOfDataFromStatML
+    Util_isInList
 	CASL_getModel
 	CASL_getSetOfEquations
 	CASL_getExpression
 	CASL_getSubExpression
 	CASL_getVector
 	CASL_getSetOfVectors
-	Util_isInList
 	PK_regularizeFileName
+	NONMEM_doSetOfRuns
+	NONMEM_getHypernormalizedVersionOfDatasets
 	parseModelFile
 
 );
 
-our $VERSION = '0.012';
+our $VERSION = '0.014';
 
 # Preloaded methods go here.
 
@@ -51,7 +53,8 @@ OpenStatisticalServices - Perl extension for representation and use of systems o
   
 =head1 DESCRIPTION
 
-This module gives a set of tools for representing statistical models using algebraic varieties, more generally approached as algebraic theories.
+This module gives a set of tools for representing and using statistical models using algebraic theories; we also make use of
+what is called the functorial semantics of algebraic theories.
 
 =head2 EXPORT
 
@@ -78,7 +81,7 @@ Copyright (C) 2004 - 2008 by Rich Haney
 
 All rights reserved.
 
-You may freely distribute and/or modify this module under the terms of either the GNU General Public License (GPL).
+You may freely distribute and/or modify this module under the terms of the GNU General Public License (GPL).
 
 =cut
 
@@ -112,7 +115,6 @@ my $improveThis; #this is an indication that I need to improve some aspect of co
 #---------------------------------------------------------------------------------
 #package OpenStatisticalServices::Util
 
-
 sub Util_convertDirectoryOfNONMEMInputFilesToStatML
 {
     my ( $inputsDirectory,$outputsDirectory ) = @_;
@@ -136,7 +138,6 @@ sub Util_convertDirectoryOfNONMEMInputFilesToStatML
     $/ = $oldFileInputSeparator;
     
 }
-
 
 sub Util_convertNONMEMInputFileToStatML
 {
@@ -255,7 +256,7 @@ sub Util_convertNONMEMInputFileToStatML
 		    push(@firstLineForSubject,$iMaxLines);
 	    }
 	    $dataLinesSplitRefs[$iMaxLines] = \@eachLine;
-	    if ( $iSubject > $iMaxSubject )
+	    if ( $iSubject =~ /\d+/ && $iSubject > $iMaxSubject )
 	    {
 		    $iMaxSubject = $iSubject;
 	    }
@@ -362,7 +363,6 @@ sub Util_convertNONMEMInputFileToStatML
 	    }
     }
 	
-	print "Writing to $outputsDirectory/$fileOut.tab\n";
     open(IFILETAB,">$outputsDirectory/$fileOut.tab" ) or die("Count not open data file\n");
     print IFILETAB join("\t",@headerHere),"\n";
 	
@@ -381,7 +381,6 @@ sub Util_convertNONMEMInputFileToStatML
     close(IFILETAB);
     		
     open(IFILE,">$outputsDirectory/$fileOut" ) or die("Count not open data file $file.xml for outputs in $outputsDirectory\n");
-    #*IFILE = *STDOUT;
 	
     print IFILE <<TOP;
     <?xml version="1.0" encoding="ISO-8859-1"?>
@@ -575,7 +574,7 @@ TOP
 				        $aLine;
 
 			        print IFILE 
-				        "	</vector>\n";
+				         " </vector>\n";
     		
     				
 			        unless ( $dataIsDifferentForIndividuals[$iField])
@@ -839,31 +838,61 @@ MATHML
 }
 
 
-sub Util_getTypeOfDataFromStatML
+sub Util_getSomeTypeOfDataFromStatML
 {
-    my $wordForTypeOfData = $_[0];
+    my ( $wordForTypeOfData, $possibleSecondaryData ) = @_;
     
-    my $toPrint = 0;
+    if ( ! defined($possibleSecondaryData) )
+    {
+        $possibleSecondaryData = "";
+    }
+
+    my $possiblyGetSecondaryData = 0;
+    my $secondaryFilterToUse = 1;
+    if( $possibleSecondaryData eq "Secondary" ) 
+    {
+        $possiblyGetSecondaryData = 1;
+    }
+    
+    my $primaryFilterToUse = 0;
 
     foreach my $file( <*.xml>)
     {
-        open(FILE,$file) or die("Could not open file\n");
-
+        open(FILE,$file) or die("Could not open file $file\n");
+        $file =~ s/\.xml//g;
+        
         while(<FILE>)
         {
 	        if ( /^\<\/$wordForTypeOfData/ )
 	        {
-		        $toPrint = 0;
+		        $primaryFilterToUse = 0;
 	        }
 
-	        if ( $toPrint )
+            if ( /^\<\/Secondary/ )
+            {
+                unless ( $possiblyGetSecondaryData )
+                {
+	                $secondaryFilterToUse = 1;
+	            }
+	         }
+
+	        if ( $primaryFilterToUse && $secondaryFilterToUse )
 	        {
 		        print $file, $_;
 	        }
 	        if ( /^\<$wordForTypeOfData/ )
 	        {
-		        $toPrint = 1;
+		        $primaryFilterToUse = 1;
 	        }
+	        
+           if ( /^\<Secondary/ )
+            {
+                unless ( $possiblyGetSecondaryData )
+                {
+	                $secondaryFilterToUse = 0;
+	            }
+	         }
+
         }
         close(FILE);
     }
@@ -1131,17 +1160,48 @@ sub Util_convertToLambdaExpression
             unless ( $string1 =~ /:/)
             {
                 my @parts = split(/,/,$string1,4);
-                if ( !defined ( $parts[1]) or $parts[1] eq "" )
+                my $nParts = scalar(@parts);
+ 
+                if ( ! defined($parts[0]))
+                {
+                    $parts[0] = "";
+                }
+                if ( ! defined($parts[1]))
+                {
+                    $parts[1] = "";
+                }
+                if ( ! defined($parts[2]))
+                {
+                    $parts[2] = "";
+                }
+                if ( ! defined($parts[3]))
+                {
+                    $parts[3] = "";
+                }
+                if ( $parts[1] eq "" )
                 {
                     $parts[1] = $parts[0];
                 }
-                $parts[0] =~ s/^\s+|\s$//g;
-                $parts[1] =~ s/^\s+|\s$//g;
-                $parts[2] =~ s/^\s+|\s$//g;
-                $parts[3] =~ s/^\s+|\s$//g;
-                $improveThis = 1;
-                $parts[3] =~ s/^,//g;
-                $parts[3] =~ s/,\s+\]/\]/g;
+                if ( $nParts > 0 )
+                {
+                    $parts[0] =~ s/^\s+|\s$//g;
+                    if ( $nParts > 1 )
+                    {
+                        $parts[1] =~ s/^\s+|\s$//g;
+                        if ( $nParts > 2 )
+                        {
+                            $parts[2] =~ s/^\s+|\s$//g;
+                            if ( $nParts > 3 )
+                            {
+                                $parts[3] =~ s/^\s+|\s$//g;
+                                $improveThis = 1;
+                                $parts[3] =~ s/^,//g;
+                                $parts[3] =~ s/,\s+\]/\]/g;
+                            }
+                        }
+                    }
+                }
+                
                 $lambdaExpression = "$parts[1]:$parts[0]$parts[2]$parts[3]\n";
                 
             }
@@ -1291,7 +1351,7 @@ sub NONMEM_doSetOfRuns
 
     $/ = "\n";
 
-	my ($selfRef, $directoryWithControlFiles, $NONMEMRunDirectory, $targetDirectory ) = @_;
+	my ($directoryWithControlFiles, $NONMEMRunDirectory, $targetDirectory ) = @_;
   
     if ( $improveThis )
     {
@@ -1353,14 +1413,19 @@ sub NONMEM_doSetOfRuns
 		    }
 	    }
 	    
-	    for ( my $i = 0; $i < scalar(@copy); $i++ )
+	    my $generateInvalidModelToTestEngines = 0;
+	    if ( $generateInvalidModelToTestEngines )
 	    {
-	        if  ( $copy[$i] =~ /\*EXP/)
+	        #This generated a bogus ( additive type ) model in order to see if the 
+            #see if the engine can process it without hanging.
+	        for ( my $i = 0; $i < scalar(@copy); $i++ )
 	        {
-	            $copy[$i] =~ s/\*EXP/\+EXP/g;
+	            if  ( $copy[$i] =~ /\*EXP/)
+	            {
+	                $copy[$i] =~ s/\*EXP/\+EXP/g;
+	            }
 	        }
 	    }
-	    
 	    open(INPUTFILE,">$file") or die("Could not open file name for input $file\n");
 	    print INPUTFILE @copy;
 	    close(INPUTFILE);
@@ -1517,7 +1582,7 @@ sub NONMEM_getHypernormalizedVersionOfDatasets
     my  $dataDirectory         = '/openStatisticalServices/data';
     my  $NONMEMDataFilesDirectory = 'd:/monolix/';
 
-    $patternForDirectoryName = "both";
+    $patternForDirectoryName = "both|collectedResults|winRuns";
     $patternForFileName = ".*CTL";
     $runsDirectory = '/openStatisticalServices/runs';
 
@@ -1530,7 +1595,7 @@ sub parseModelFile
 {
 
     my $selfRef;
-    ( $selfRef, $writeNonmem, $writeMaple, $writeAsAlgebraicTheory, $writeWinbugs, $useWinBugs, $writeCASL, $useMATLAB ) = @_;
+    ( $selfRef, $writeNonmem, $writeMaple, $writeAsAlgebraicTheory, $writeWinbugs, $writeCASL, $useWinBugs, $useMATLAB ) = @_;
     
     if ( $useWinBugs )
     {
@@ -1627,6 +1692,38 @@ sub parseModelFile
     
 }
 
+sub insertFileContentsIntoAbstractSyntaxTree
+{
+    my ( $inputFileName, $astRef, $token) = @_;
+    
+    my $linesFound = 0;
+    my $fileFound = open(INPUTFILE,$inputFileName);
+    if ( ! $fileFound )
+    {
+        print("Could not open file to insert into AST\n");
+    }
+    
+    if ( $fileFound )
+    {
+    	my $oldSeparator =  $/;
+        $/ = "\n";
+        
+        my @lines = <INPUTFILE>;
+
+        my $joinedLines = join("\n", @lines);
+        my ( $parseTreeRef, $stateForParseDEQ ) = parseEquations($joinedLines,"OK");
+        
+        $/ = $oldSeparator;
+
+        $astRef = insertSubTree($astRef,$token,$parseTreeRef,);
+        $linesFound = scalar(@lines);
+    }
+ 
+    return($astRef);
+    
+}
+
+
 sub copyFileToAlgebraicTheoryLines
 {
     my ( $inputFileName, $AlgebraicTheoryHandle, $token) = @_;
@@ -1690,8 +1787,6 @@ sub ParseMATLABMetadataAndModel
 		printResults($derivationsForVariablesRef, $inputFileHandle,$outputFileHandle,
 			$logFileHandle,$CASLOutputFileName,$dataFileName,$useWinBugs,$useMATLAB);
 	}	
-	
-	printTree(\%treeRefs,0,*STDOUT,"");
 	
 	return ( \%treeRefs, $state );
 
@@ -2329,7 +2424,6 @@ sub printResults
 		$logFileHandle, $CASLOutputFileName, $dataFileName, $useWinBugs,$useMATLAB ) = @_;
 	
 	$improveThis = 1;
-	printTree($globalASTRef,0,*STDOUT,"");
 	
 	my $derivativesRef = "";
 	if ( $modelType eq "WinBUGS")
@@ -2387,8 +2481,6 @@ sub printResults
 
 		my @variableNames = ("THETA","ETA","A","ERR","DADT");
 	
-		printTree($globalASTRef,0,*STDOUT,"");
-
 		for my $variableName (@variableNames )
 		{
 			($globalASTRef,$state)  = modifyTree($globalASTRef,\&checkForUseOfVector,\&replaceUseOfVectorWithScalar,$variableName,"",0,100,0);
@@ -2407,8 +2499,6 @@ sub printResults
 		my @arrayOfSigmaBounds = ();
 		%tags = ( label  => "SIGMA", startTag => "\$SIGMA ", separator =>" ", endTag  => "\n",routine => \&fillInArrayOfValuesInParentheses, subRoutine => \&getOmegaBoundsAsValues );
 		( $arrayOfAllBounds{"SIGMA"}, $state ) = fillInArrayOfInfoFromSubTree($globalASTRef,"ERROR",\%tags,\@arrayOfSigmaBounds,0);
-
-	    printTree($globalASTRef,0,*STDOUT,"");
 
 		$globalASTRef = insertSubTree($globalASTRef,"THETA_BOUNDS",\%arrayOfAllBounds);
 		
@@ -2438,8 +2528,6 @@ sub printResults
 				$allExponentialDependencies{$variableName . $iNumber} = $exponentialDependenciesRef;
 			}
 		}
-		
-		printTree($globalASTRef,0,*STDOUT,"");
    
 	 	$globalASTRef = insertSubTree($globalASTRef,"VECTOR_VARIABLE_DEPENDENCIES",$derivationsForVariablesRef);
 
@@ -2631,7 +2719,7 @@ sub printResults
 		$PKTreeRef = getSubTree($globalASTRef,"PK");
 		my $dependenciesRef;
 		($dependenciesRef,$state) = getHashOfInfoFromTree($PKTreeRef,\%tags, 0, \%LHSDependencies );
-	   
+ 
 	    $globalASTRef = insertSubTree($globalASTRef,"LHS_DEPENDENCIES",$dependenciesRef);
 	    @arrayOfInfoAsSideEffectsYesThisIsBad = ();
 	   	($PKTreeRef,$state)  = modifyTree($PKTreeRef,\&checkForNamesUsingOddRules,\&replacePKNamesUsingOddRules,$dependenciesRef,"",0,100,1);
@@ -2650,7 +2738,7 @@ sub printResults
 	    
 	   	%tags = ( label => "DES", startTag => "", endTag => "\n", processingMethods => \%processingMethodsForDependencies, routine => \&getFullRHSForVariable, subRoutine => \&dummy);
 		my $DESExpandedTreeRef = getSubTree($globalASTRef,"DES");
-		
+	
 	   	($DESExpandedTreeRef,$state)  = modifyTree($DESExpandedTreeRef,\&checkForNames,\&replaceNamesAndStoreThoseUsed,$dependenciesRef,"",0,100,0);
        	$globalASTRef = insertSubTree($globalASTRef,"PK",$PKTreeRef);
  
@@ -2719,12 +2807,16 @@ sub printResults
         $variablesCountTree{length} = $variablesCount;
         $globalASTRef = insertSubTree($globalASTRef,"NB_COUNT",\%variablesCountTree);
  
+        my $DESFileName = getRegularizedModelName();
+        my $fileRoot = "\\openStatisticalServices\\models\\DifferentialEquations\\";
+        $globalASTRef = insertFileContentsIntoAbstractSyntaxTree("$fileRoot$DESFileName.DES",$globalASTRef,"DESMASTER");
+
         writeMonolixModel($globalASTRef,$CASLOutputFileName,$dataFileName);     
         writeMonolixDataFile($globalASTRef,$CASLOutputFileName,$dataFileName);
-
+   		
    		writeNonmemFile($globalASTRef,$CASLOutputFileName,$dataFileName);
 
-		$improveThis = 1; # should be separate from nonmem file.
+	    $improveThis = 1; # should be separate from nonmem file.
 		
 		if ( $writeAsAlgebraicTheory )
 		{
@@ -2743,6 +2835,7 @@ sub printResults
 		}
 
 		$globalASTRef = modifySubTree($globalASTRef,"DES",\&checkForAssignment,\&storeAssignment,"",0,100,0);
+	
 		$globalASTRef = modifySubTree($globalASTRef,"DES",\&checkForNames,&replaceNameWithParseTree,$derivationsForVariablesRef,"",0,100,0);
 	
 		my $useJetNotation = 0;
@@ -2889,12 +2982,11 @@ sub getInfoFromSubTree
 {
 	
 	my ($localParseTreeRef, $subTreeName, $tagsRef, $iTreeLevel) = @_;
-	my $globalASTRef = $localParseTreeRef;
 	
-	my %completeParseTree = %$globalASTRef;
+	my %localParseTree = %$localParseTreeRef;
 	my %tags          = %$tagsRef;
 	
-	my $DESTreeRef = $completeParseTree{$subTreeName};
+	my $DESTreeRef = $localParseTree{$subTreeName};
 	my $functionRef   = $tags{"routine"};
 	if ( $functionRef eq "" )
 	{
@@ -3243,7 +3335,7 @@ sub getDifferentialEquations
 			my $expressionLeft = "";
 			my $expressionRight = "";
 			
-			unless ( $getLeftRightOrBothSides eq "Right")
+			unless ( defined($getLeftRightOrBothSides) && ( $getLeftRightOrBothSides eq "Right"))
 			{
 				$expressionLeft = getExpression($hashTree{"left"},$processingMethodsRef);
 				my $modifyDifferentialExpressionRef = $processingMethods{"modifyDifferentialExpression"};
@@ -3253,7 +3345,7 @@ sub getDifferentialEquations
 				}
 			}
 			
-			unless ( $getLeftRightOrBothSides eq "Right" or $getLeftRightOrBothSides eq "Left")
+			unless ( defined($getLeftRightOrBothSides) && ( $getLeftRightOrBothSides eq "Right" or $getLeftRightOrBothSides eq "Left"))
 			{
 				my $oper = $hashTree{"oper"};
 				if ( $oper =~ /$assignmentOperator/)
@@ -3263,7 +3355,7 @@ sub getDifferentialEquations
 				$improveThis = 1;
 				if ( $improveThis )
 				{
-					if ( $oper eq "" )
+					if ( ( ! defined($oper) ) or ( $oper eq "" ) )
 					{
 						$oper = " = ";
 					}
@@ -3272,7 +3364,7 @@ sub getDifferentialEquations
 				$expressionLeft .= $oper;
 			}
 			
-			unless ( $getLeftRightOrBothSides eq "Left")
+			unless ( defined($getLeftRightOrBothSides) && ($getLeftRightOrBothSides eq "Left"))
 			{
 				$expressionRight = getExpression($hashTree{"right"},$processingMethodsRef,$expressionLeft);
 				my $modifyDifferentialExpressionRef = $processingMethods{"modifyDifferentialExpression"};
@@ -3283,7 +3375,7 @@ sub getDifferentialEquations
 			}
 			my @names = ("right","fname");
 			my $forLoopOrIfThen = getSubTree($hashTreeRef,\@names);
-			if ( defined($forLoopOrIfThen) && ( $forLoopOrIfThen eq "FORLOOP" or $forLoopOrIfThen eq "IF" ))
+			if ( ( defined($forLoopOrIfThen) ) && ( $forLoopOrIfThen eq "FORLOOP" or $forLoopOrIfThen eq "IF" ))
 			{
 				$expression .= $expressionRight;
 			}
@@ -3378,7 +3470,7 @@ sub getLHSDependencies
 		
 		}
 	}
- ;
+
 	printTree(\%allVariables,0,*STDOUT,"");
 	
     return ( \%allVariables,"OK");
@@ -3816,26 +3908,26 @@ sub getExpression
 		my $leftRef            = $hashTree{"left"};
 		my $rightRef           = $hashTree{"right"};
 		
-		if ( defined($infixOperator) && ( $infixOperator eq "," or $infixOperator eq "." ))
+		if ( defined($infixOperator) && length($infixOperator) > 0 && ( $infixOperator eq ","  or $infixOperator eq "." ))
 		{
 			$string .= getExpression($leftRef,$processingMethodsRef,$string);
 			$string .= $infixOperator;
 			$string .= getExpression($rightRef,$processingMethodsRef,$string);
 		}
-		elsif ( $leftRef ne "" && $rightRef ne "" )
+		elsif ( defined($leftRef ) &&  $leftRef ne "" && defined($rightRef) && $rightRef ne "" )
 		{
 			my %leftTree           = %$leftRef;
 			my %rightTree          = %$rightRef;
 
-			if ($leftTree{"left"} ne "") { $string .= "(" };
+			if (defined($leftTree{"left"}) && $leftTree{"left"} ne "") { $string .= "(" };
 			$string .= getExpression($leftRef,$processingMethodsRef,$string);
-			if ($leftTree{"left"} ne "") { $string .= ")" };
+			if (defined($leftTree{"left"}) && $leftTree{"left"} ne "") { $string .= ")" };
 			$string .= $infixOperator;
-			if ($rightTree{"right"} ne ""){ $string .= "(" };
+			if (defined($rightTree{"right"}) && $rightTree{"right"} ne ""){ $string .= "(" };
 			$string .= getExpression($rightRef,$processingMethodsRef,$string);
-			if ($rightTree{"right"} ne "") { $string .= ")" };
+			if (defined($rightTree{"right"}) && $rightTree{"right"} ne "") { $string .= ")" };
 		}
-		elsif ( $prefixOperator ne "" && $prefixOperator ne "const" && $prefixOperator ne "var" )
+		elsif ( defined($prefixOperator) && ( $prefixOperator ne "" ) && $prefixOperator ne "const" && $prefixOperator ne "var" )
 		{
 		
 			my $ifThenElseExpression;
@@ -3866,7 +3958,7 @@ sub getExpression
 					$string = &$getIfThenExpressionRef($rightRef,$processingMethodsRef,$expressionSoFar);
 				}
 			}
-			elsif ( $prefixOperator eq "FORLOOP")
+			elsif ( defined($prefixOperator ) && ( $prefixOperator eq "FORLOOP") )
 			{
 				my @subNames = ("right","left","left","name");
 				my $varName = getSubTree($hashTreeRef,\@subNames);
@@ -3931,7 +4023,7 @@ sub getExpression
 				$string .= ")";
 			}
 		}
-		elsif ( $unaryOperator ne "" )
+		elsif ( defined($unaryOperator) && ( $unaryOperator ne "" ) )
 		{
 			$string .= $hashTree{"monop"};
 			$string .= getExpression( $rightRef,$processingMethodsRef,$string);
@@ -3939,13 +4031,20 @@ sub getExpression
 		else
 		{
 			my $name = $hashTree{"name"};
-			if ( $getLanguageSpecificVersionOfVariableRef )
-			{
-				$name =  &$getLanguageSpecificVersionOfVariableRef($name);
-			}
 			
-			$string .=  $name;
-			$string .=  $hashTree{"val"};
+			if ( defined($name))
+			{
+			    if ( $getLanguageSpecificVersionOfVariableRef )
+			    {
+				    $name =  &$getLanguageSpecificVersionOfVariableRef($name);
+			    }
+    			
+			    $string .=  $name;
+			    if ( defined($hashTree{"val"}))
+			    {
+			        $string .=  $hashTree{"val"};
+			    }
+			 }
 		}
 	}
 	
@@ -4022,7 +4121,7 @@ sub getHashOfArrayOfValuesInParentheses
 		
 		my %hashTreeForVariable = %$hashTreeRef;
 		my $hashTreeSetRef = $hashTreeForVariable{"variable"};
-		if ( $hashTreeSetRef eq "" )
+		if ( defined($hashTreeSetRef) && $hashTreeSetRef eq "" )
 		{
 			$hashTreeSetRef = $hashTreeForVariable{"vector"};
 		}
@@ -4067,7 +4166,10 @@ sub getHashOfArrayOfValuesInParentheses
 				}
 				else
 				{
-					$expression .= " " . $unknownRef1;
+				    if ( defined($unknownRef1) )
+				    {
+					    $expression .= " " . $unknownRef1;
+					}
 				}
 			}
 		}
@@ -4129,15 +4231,21 @@ sub fillInArrayOfValuesInParentheses
 			}
 			foreach my $unknownRef1 ( @array )
 			{
-				if ( ref($unknownRef1) && $unknownRef1 =~ /HASH/)
-				{
-					my %hash = %$unknownRef1;
-					my @vector = $hash{"middle"};
-					$arrayOfValues[$iTheta++] = &$routine(@vector,\%tags);
-				}
-				elsif ( $unknownRef1 =~ /\w/)
-				{
-					$arrayOfValues[$iTheta++] = $unknownRef1;
+			    if ( defined($unknownRef1 ) )
+			    {
+				    if ( ref($unknownRef1) )
+				    {
+				        if ( $unknownRef1 =~ /HASH/)
+				        {
+					        my %hash = %$unknownRef1;
+					        my @vector = $hash{"middle"};
+					        $arrayOfValues[$iTheta++] = &$routine(@vector,\%tags);
+					    }
+				    }
+				    elsif ( $unknownRef1 =~ /\w/)
+				    {
+					    $arrayOfValues[$iTheta++] = $unknownRef1;
+				    }
 				}
 			}
 		}
@@ -4412,29 +4520,33 @@ sub obtainInverseHashOfValues
 	    for ( my $key = 1; ; $key++)
 	    {
 		    my $value = $treeForThisTag{"$key"};
-		    last if $value eq ""; 
+		    last if ( ! defined($value) ) or $value eq ""; 
 		    
 		    my $keyPlusValue = $tag . $key;
 		    my $previous = $mapOfNames{$value};
-		    my @previousOnes = split(/,/,$previous);
-		    my $previouslyThere = 0;
-		    foreach my $previousOne ( @previousOnes)
+		    
+		    if ( defined($previous ) )
 		    {
-		        if ( $previousOne eq $keyPlusValue)
-		        {   
-		            $previouslyThere = 1;
+		        my @previousOnes = split(/,/,$previous);
+		        my $previouslyThere = 0;
+		        foreach my $previousOne ( @previousOnes)
+		        {
+		            if ( $previousOne eq $keyPlusValue)
+		            {   
+		                $previouslyThere = 1;
+		            }
 		        }
-		    }
-		    next if $previouslyThere;
-		    if ( $previous )
-		    {
-		        $mapOfNames{$value} = $previous . "," . $keyPlusValue;
-		    }  
-		    else
-		    {
-		        $mapOfNames{$value} = $keyPlusValue;
-		    }  
-	    }
+		        next if $previouslyThere;
+		        if ( $previous )
+		        {
+		            $mapOfNames{$value} = $previous . "," . $keyPlusValue;
+		        }  
+		        else
+		        {
+		            $mapOfNames{$value} = $keyPlusValue;
+		        }  
+	        }
+	     }
 	}
 	
 	return(\%mapOfNames,"OK");
@@ -4453,7 +4565,7 @@ sub obtainInverseHashOfValuesForMaple
 	for ( my $key = 1; ; $key++ )
 	{
 		my $value = $hashTree{"$key"};
-		last if $value eq "";
+		last if ( ! defined($value) ) or $value eq "";
 		$mapOfNames{$value} = $tag . $key;
 	}
 	
@@ -5196,7 +5308,7 @@ sub getNONMEMControlFiles
 					            if ( $iFirst )
 					            {
 						            print DATAICS " A1(0)	= $values[$iAmt]\n";
-						            print DATAICS "	;\#A1(0)	 = iDose\n";
+						            print DATAICS "	\#A1(0)	 = iDose\n";
 					            }
 					            $iFirst = 0;
 				            }
@@ -5498,11 +5610,11 @@ sub checkForIFStatement
 			{
 				my %hashTree = %$hashRef;
 				
-				if ( $hashTree{"oper"} eq "=" )
+				if ( defined($hashTree{"oper"} ) && ($hashTree{"oper"} eq "=" ))
 				{
 					my $hashTreeRightRef = $hashTree{"right"};
 					my %hashTreeRight    = %$hashTreeRightRef;
-					if ( $hashTreeRight{"fname"} eq "IF" )
+					if ( defined($hashTreeRight{"fname"}) && $hashTreeRight{"fname"} eq "IF" )
 					{
 						$iFound = 1;
 					}
@@ -5549,14 +5661,14 @@ sub checkForTautology
 			{
 				my %hashTree = %$hashRef;
 		
-				if ( scalar(%hashTree) == 0 )
+				if ( scalar(keys(%hashTree)) == 0 )
 				{
 					$iFound = 1;
 					print "Internal error in CheckForTautology\n";
 					exit;
 				}
 				
-				if ( $hashTree{"oper"} eq $assignmentOperator)
+				if ( defined($hashTree{"oper"}) && ( $hashTree{"oper"} eq $assignmentOperator))
 				{
 					my $rightTreeRef = $hashTree{"right"};
 					if ( !ref ( $rightTreeRef ) )
@@ -5575,7 +5687,8 @@ sub checkForTautology
 					my $leftVariableName  = $leftTree{"name"};
 					my $rightVariableName = $rightTree{"name"};
 
-					if ( $leftVariableName ne "" && $leftVariableName eq $rightVariableName )
+
+					if ( defined($leftVariableName) && $leftVariableName ne "" && defined($rightVariableName) && $leftVariableName eq $rightVariableName )
 					{
 						$iFound = 1;
 					}
@@ -6222,9 +6335,9 @@ sub checkForNames
 		my %hashOfNames = %$mapOfNames;
 		my $name = $hashTree{"name"};
 		
-		if ( $name ne "" )
+		if ( defined($name) && $name ne "" )
 		{
-			if ( $hashOfNames{$name} ne "" )
+			if ( defined($hashOfNames{$name}) && $hashOfNames{$name} ne "" )
 			{
 				$iFound = 1;
 			}
@@ -6248,11 +6361,11 @@ sub checkForNamesUsingOddRules
 		my %hashOfNames = %$mapOfNames;
 		my $name = $hashTree{"name"};
 
-	    if ( $name ne ""  )
+	    if ( defined($name) && ( $name ne "" )  )
 		{ 
 		    unless ( $name =~ /^S\d/)
 		    {
-			    if ( $hashOfNames{$name} ne "" )
+			    if ( defined( $hashOfNames{$name}) && ($hashOfNames{$name} ne "" ) )
 			    {
 			        my $variablesTreeRef = $hashOfNames{$name};
 			        my %variablesTree    = %$variablesTreeRef;
@@ -6463,7 +6576,7 @@ sub checkForUseOfVector
 	if ( ref($hashTreeRef) && $hashTreeRef =~ /HASH/ )
 	{
 		my %hashTree = %$hashTreeRef;
-		if ( defined($hashTree{"fname"} && $hashTree{"fname"} eq $name ))
+		if ( defined($hashTree{"fname"}) && $hashTree{"fname"} eq $name )
 		{
 			$iFound = 1;
 		}
@@ -6525,17 +6638,20 @@ sub checkForUseOfFunctionAndVariable
 	if ( ref($hashTreeRef) && $hashTreeRef =~ /HASH/ )
 	{
 		my %hashTree = %$hashTreeRef;
-		if ( $hashTree{"fname"} =~ /^$nameOfFunction$/i )
+		if ( defined($hashTree{"fname"}) && ( $hashTree{"fname"} =~ /^$nameOfFunction$/i ) )
 		{
 			$iFound = 1;
 		}
 		else
 		{
 			my $nameToExamine = $hashTree{"name"};
-			$nameToExamine =~ s/[\(\]\.*|[\)\]].*//g;
-			if ( $nameToExamine eq $nameOfFunction )
+			if ( defined($nameToExamine) )
 			{
-				$iFound = 1;
+			    $nameToExamine =~ s/[\(\]\.*|[\)\]].*//g;
+			    if ( ( $nameToExamine eq $nameOfFunction ) )
+			    {
+				    $iFound = 1;
+			    }
 			}
 		}
 		if ( $iFound )
@@ -7398,7 +7514,11 @@ sub printTree
 			$temporaryFileHandle = *STDOUT;
 		}
 		print $temporaryFileHandle "\nStart of tree-------------------------\n";
-		print $title;
+		
+		if ( defined($title))
+		{
+		    print $title;
+		}
 	}
 
 	if (!ref($treeRef ) )
@@ -7450,7 +7570,10 @@ sub printTree
 		elsif ($treeRef =~ /.*SCALAR.*/)
 		{
 			print $temporaryFileHandle "\n", " " x (4*($iTreeLevel));
-			print $temporaryFileHandle "$$treeRef";
+			if ( defined($$treeRef))
+			{
+			    print $temporaryFileHandle "$$treeRef";
+			}
 		}
 		else 
 		{
@@ -7464,7 +7587,10 @@ sub printTree
 	
 	if ( $iTreeLevel == 0 )
 	{
-		print $title;
+		if (defined($title ))
+		{
+		    print $title;
+		}
 		print $temporaryFileHandle "\nEnd of tree-------------------------\n";
 	}
 }
@@ -7668,7 +7794,7 @@ sub checkSubTreeForDependencies
 	my $iScalar = 0;
 	
 	printTree(\%hashTree,0,*STDOUT,"");
-	if ( $hashTree{"fname"} eq $name )
+	if ( defined($hashTree{"fname"}) && ( $hashTree{"fname"} eq $name ) )
 	{
 		
 		my %rightRightTree = %{$hashTree{"right"}};
@@ -8810,11 +8936,11 @@ sub writeAsAlgebraicTheory
 	my $DESEquationsAsAlgebraicTheory = splitLabelAndEquations("DES", $DESEquations,"\=");
 	print $AlgebraicTheoryHandle Util_convertToLambdaExpression($DESEquationsAsAlgebraicTheory);
 
+    #Improve this -- make use of DESMASTER already in the AST
     my $DESFileName = getRegularizedModelName();
     my $fileRoot = "\\openStatisticalServices\\models\\DifferentialEquations\\";
-    
     my $fileFound = 1;
-    
+
     my $linesFound = copyFileToAlgebraicTheoryLines("$fileRoot$DESFileName.DES",$AlgebraicTheoryHandle,"DESMASTER");
     if ( $linesFound == 0 )
     {
@@ -9005,10 +9131,13 @@ sub splitOutFunctionAndFunctionValues
 	{
 		$equation =~ s/\s+//g;
 		my ( $lhs, $center, $blank) = split(/\(|\)/,$equation);
-		my @params = split(/,/,$center);
-		$params[1] =~ s/DEF//g;
-		$finalString .= $label . ", " . $params[1] . "(" . $params[0] . ")" . ", " . "=" . ", " . "TRUE";
-		$finalString .= "\n";
+		if ( defined($center))
+		{
+		    my @params = split(/,/,$center);
+		    $params[1] =~ s/DEF//g;
+		    $finalString .= $label . ", " . $params[1] . "(" . $params[0] . ")" . ", " . "=" . ", " . "TRUE";
+		    $finalString .= "\n";
+		}
 	}
 	return ( $finalString);
 	
@@ -9026,6 +9155,15 @@ sub splitOutSingleStringAndAttributes
 	foreach my $equation ( @equations)
 	{
 		my ( $lhs, $rhs) = split(/=/,$equation);
+		if ( ! defined($lhs))
+		{
+		    $lhs = "";
+		}
+		if ( ! defined($rhs))
+		{
+		    $rhs = "";
+		}
+		
 		$finalString .= $label . ", " . $lhs . ", " . "\"" . q(=) . "\""  . ", " . $rhs . "\n";
 	}
 	return ( $finalString);
@@ -9083,7 +9221,9 @@ sub writeMapleFile
 	
 	open(MAPLEFILE,">$mapleFileName" ) or die("Could not open Maple file $mapleFileName\n");
 	$mapleFileHandle = *MAPLEFILE;
-	print $mapleFileHandle "---------------------------------------------------------------------\n";
+	#$mapleFileHandle = *STDOUT;
+	
+	print $mapleFileHandle "#---------------------------------------------------------------------\n";
 
 	$printHandle = $mapleFileHandle;
 	
@@ -9093,16 +9233,16 @@ sub writeMapleFile
 	
 	( $infoString, $state ) = getInfoFromTree($globalASTRef,\%tags,0);
 
-	%tags = ( label  => "INPUT ", startTag => ";\#INPUT", endTag  => "\n",internalStartTag => "", internalEndTag => "",routine => \&reportArrayOfValues, separator => " ",subRoutine => \&reportTagAndValueOrHashGeneral, printHandle => $mapleFileHandle);
+	%tags = ( label  => "INPUT ", startTag => "\#INPUT", endTag  => "\n",internalStartTag => "", internalEndTag => "",routine => \&reportArrayOfValues, separator => " ",subRoutine => \&reportTagAndValueOrHashGeneral, printHandle => $mapleFileHandle);
 	( $infoString, $state ) = getInfoFromTree($globalASTRef,\%tags, 0);
 
-	%tags = ( label  => "DATA ", startTag => ";\#DATA", endTag  => "\n", routine => \&reportArrayOfValues, separator => " ",subRoutine => \&reportTagAndValueOrHashGeneral, printHandle => $mapleFileHandle );
+	%tags = ( label  => "DATA ", startTag => "\#DATA", endTag  => "\n", routine => \&reportArrayOfValues, separator => " ",subRoutine => \&reportTagAndValueOrHashGeneral, printHandle => $mapleFileHandle );
 	( $infoString, $state ) = getInfoFromTree($globalASTRef,\%tags,0);
 	
-	%tags = ( label  => "SUBROUTINE ", startTag => ";\#SUBROUTINE", endTag  => "\n", separator => " ", routine => \&reportArrayOfValues,subRoutine => \&reportTagAndValueOrHashGeneral, printHandle => $mapleFileHandle );
+	%tags = ( label  => "SUBROUTINE ", startTag => "\#SUBROUTINE", endTag  => "\n", separator => " ", routine => \&reportArrayOfValues,subRoutine => \&reportTagAndValueOrHashGeneral, printHandle => $mapleFileHandle );
 	( $infoString, $state ) = getInfoFromTree($globalASTRef,\%tags,0);
 
-	%tags = ( label  => "MODEL ", startTag => ";\#MODEL", endTag  => "\n", printHandle => $mapleFileHandle, separator => " ",routine => \&reportArrayOfValues, subRoutine => \&reportTagAndValueOrExpressionGeneral);
+	%tags = ( label  => "MODEL ", startTag => "\#MODEL", endTag  => "\n", printHandle => $mapleFileHandle, separator => " ",routine => \&reportArrayOfValues, subRoutine => \&reportTagAndValueOrExpressionGeneral);
 	( $infoString, $state ) = getInfoFromTree($globalASTRef,\%tags,0);
 	
 	my %processingMethodsForStateVariables = (
@@ -9180,10 +9320,10 @@ sub writeMapleFile
 
 interface(echo=4,showassumed=0): BasisFormat(false): with(DEtools): with(diffalg): with(CodeGeneration): with(PDEtools): with(plots): undebug(dsolve): with(plottools):
 
-;\#Define dependencies
+\#Define dependencies
 #declare($stateDependencies):
 
-;\#Define Assumptions 
+\#Define Assumptions 
 maplePart1
 
 	%tags = ( label  => "THETA", startTag => "assume(", endTag  => "\n):\n", separator => ", ", routine => \&getHashOfArrayOfValuesInParentheses, subRoutine => \&getThetaBounds, indentLevel => 1 );
@@ -9222,25 +9362,43 @@ maplePart1
 	else
 	{
 		@icsLines = <DATAICS>;
+		for ( my $i = 0; $i < scalar(@icsLines); $i++ ) { $icsLines[$i] =~ s/$/ /g; }
 		close ( DATAICS);
 	}
 
 print $mapleFileHandle <<maplePart1b;
 
-;\#Define initial conditions
+\#Define initial conditions
 	@icsLines
 
-;\#Define the basic equations
+\#Define the basic equations
 maplePart1b
 
 	%processingMethods = (
 		getLanguageSpecificVersionOfVariable => \&getMapleVersionOfVariable,
 		getIfThenExpression                  => \&getWinbugsIfThenExpression 
 	);
-	
-	%tags = ( label  => "DES", startTag => "\nS:=[\n	", separator => "\n	", endTag  => "\n];\n", printHandle => $mapleFileHandle, routine => \&getDifferentialEquations, getLeftRightOrBothSides => 'Both', processingMethods => \%processingMethods, subRoutine => "" );
-	my $differentialEquations;
-	( $differentialEquations, $state ) = getInfoFromSubTree($globalASTRef,"DES",\%tags,0);
+
+	my $useMine = 0; #improve this -- temporarily, just use masters.
+	if ( $useMine )
+    {	
+	    %tags = ( label  => "DES", startTag => "\nS:=[\n	", separator => "\n	", endTag  => "\n];\n", printHandle => $mapleFileHandle, routine => \&getDifferentialEquations, getLeftRightOrBothSides => 'Both', processingMethods => \%processingMethods, subRoutine => "" );
+	    my $differentialEquations;
+	    ( $differentialEquations, $state ) = getInfoFromSubTree($globalASTRef,"DES",\%tags,0);
+		print $mapleFileHandle $differentialEquations, "\n";
+
+	}
+	my $useMaster = 1; #improve this
+	if ( $useMaster )
+    {	
+
+	    %tags = ( label  => "DESMASTER", startTag => "\nS:=[\n	", separator => "\n	", endTag  => "\n];\n", printHandle => $mapleFileHandle, routine => \&getDifferentialEquations, getLeftRightOrBothSides => 'Both', processingMethods => \%processingMethods, subRoutine => "" );
+	    my $differentialEquationsMaster;
+	    ( $differentialEquationsMaster, $state ) = getInfoFromSubTree($globalASTRef,"DESMASTER",\%tags,0);
+		
+		print $mapleFileHandle $differentialEquationsMaster, "\n";
+	}
+
 	
 	$stateVariablesRef = getSubTree($globalASTRef,"PK_STATE_VARIABLES");
 	if ( ref($stateVariablesRef) )
@@ -9254,14 +9412,13 @@ maplePart1b
 	
 	my $allVariables = $stateVariables . ",extra," . $parameters;
 	
-	print $mapleFileHandle $differentialEquations, "\n";
 	
 	print $mapleFileHandle <<maplePart2;
 
-;\#Consolidate the basic equations and the initial conditions.
+\#Consolidate the basic equations and the initial conditions.
 SandICS := [op(S), op(ics)]:
 
-;\#Solve the basic system
+\#Solve the basic system
 mySol := dsolve(SandICS);
 mySol := simplify(mySol);
 
@@ -9271,9 +9428,9 @@ S := simplify(S);
 
 results := dpolyform(S);
 
-;\#--------------------------------------------------------------------------------
-;\#Do an initial hack version of converting to polynomial form.
-;\#Step 1: remove the denominators.
+\#--------------------------------------------------------------------------------
+\#Do an initial hack version of converting to polynomial form.
+\#Step 1: remove the denominators.
 myRhs := 1:
 for i to nops(S) do 
 	x := op(i, S):
@@ -9289,79 +9446,79 @@ for i to nops(S) do
 	end do;
 end do;
 
-;\#Step 2: The next step is to add in an additional variable
+\#Step 2: The next step is to add in an additional variable
 eqExtra := 'diff(extra(t), t)' = 'extra(t)^2'*(diff(myDenom, t)):
 for k to nops(S) do 
 	eqExtra := algsubs(lhs(S[k]) = rhs(S[k]), eqExtra) 
 end do:
 S := [op(S), eqExtra]:
 
-;\#Step 3: add in an additional initial condition for the additional variable.
+\#Step 3: add in an additional initial condition for the additional variable.
 extraCondition := extra(0) = 1/myDenom;extraCondition := algsubs(t = 0, extraCondition);
 for k to nops(ics) do 
 	extraCondition := algsubs(lhs(ics[k]) = 0, extraCondition) 
 end do;
 ics := [ics, extraCondition];
-;\#--------------------------------------------------------------------------------
+\#--------------------------------------------------------------------------------
 
-;\#Construct the differential ring needed to find the characteristic set.
+\#Construct the differential ring needed to find the characteristic set.
 SAsDifferentialRing := S;
 for k to nops(S) do 
 	SAsDifferentialRing[k] := lhs(S[k])-rhs(S[k]) 
 end do;
 R := differential_ring(derivations = [t], ranking = [$allVariables], notation = 'diff');
 
-;\#Finally, compute the characteristic set ( does not work yet )
+\#Finally, compute the characteristic set ( does not work yet )
 Results := Rosenfeld_Groebner(SAsDifferentialRing, R);
 
-;\#Step 3: add in an additional initial condition for the additional variable.
+\#Step 3: add in an additional initial condition for the additional variable.
 extraCondition := extra(0) = 1/myDenom;extraCondition := algsubs(t = 0, extraCondition):
 for k to nops(ics) do 
 	extraCondition := algsubs(lhs(ics[k]) = 0, extraCondition) 
 end do:
 ics := [ics, extraCondition]:
-;\#--------------------------------------------------------------------------------
+\#--------------------------------------------------------------------------------
 
-;\#Construct the differential ring needed to find the characteristic set.
+\#Construct the differential ring needed to find the characteristic set.
 SAsDifferentialRing := S:
 for k to nops(S) do 
 	SAsDifferentialRing[k] := lhs(S[k])-rhs(S[k]) 
 end do:
 
-;\#Finally, compute the characteristic sets
+\#Finally, compute the characteristic sets
 Results := Rosenfeld_Groebner(SAsDifferentialRing, R);
 
 maplePart2
 
-	%tags = ( label  => "ERROR", startTag => ";\#ERROR ", separator =>"; ", endTag  => "\n", routine => \&getDifferentialEquations, subRoutine => \&dummy );
+	%tags = ( label  => "ERROR", startTag => "\#ERROR ", separator =>"; ", endTag  => "\n", routine => \&getDifferentialEquations, subRoutine => \&dummy );
 	( $infoString, $state ) = getInfoFromTree($globalASTRef,\%tags,0);
 	print $mapleFileHandle $infoString;
 
-	%tags = ( label  => "THETA", startTag => ";\#THETA ", separator =>" ", endTag  => "\n", routine => \&getHashOfArrayOfValuesInParentheses, subRoutine => \&getThetaGeneral );
+	%tags = ( label  => "THETA", startTag => "\#THETA ", separator =>" ", endTag  => "\n", routine => \&getHashOfArrayOfValuesInParentheses, subRoutine => \&getThetaGeneral );
 	( $infoString, $state ) = getInfoFromTree($globalASTRef,\%tags,0);
 	print $mapleFileHandle $infoString;
 
-	%tags = ( label  => "ETA", startTag => ";\#OMEGA ", separator =>" ", endTag  => "\n", routine => \&getHashOfArrayOfValues, subRoutine => \&getOmegaInitialValuesGeneral );
+	%tags = ( label  => "ETA", startTag => "\#OMEGA ", separator =>" ", endTag  => "\n", routine => \&getHashOfArrayOfValues, subRoutine => \&getOmegaInitialValuesGeneral );
 	( $infoString, $state ) = getInfoFromTree($globalASTRef,\%tags,0);
 	print $mapleFileHandle $infoString;
 	
-	%tags = ( label  => "SIGMA", startTag => ";\#SIGMA ", separator =>" ", endTag  => "\n", printHandle => $mapleFileHandle, routine => \&getHashOfArrayOfValues, subRoutine => \&getOmegaInitialValuesGeneral );
+	%tags = ( label  => "SIGMA", startTag => "\#SIGMA ", separator =>" ", endTag  => "\n", printHandle => $mapleFileHandle, routine => \&getHashOfArrayOfValues, subRoutine => \&getOmegaInitialValuesGeneral );
 	( $infoString, $state ) = getInfoFromTree($globalASTRef,\%tags,0);
 	print $mapleFileHandle $infoString;
 
-	%tags = ( label  => "TAB", startTag => ";\#TAB ", endTag  => "\n", separator => ' ', printHandle => $mapleFileHandle, routine => \&getHashOfArrayOfValues, subRoutine => \&getTagAndValueOrHashGeneral );
+	%tags = ( label  => "TAB", startTag => "\#TAB ", endTag  => "\n", separator => ' ', printHandle => $mapleFileHandle, routine => \&getHashOfArrayOfValues, subRoutine => \&getTagAndValueOrHashGeneral );
 	( $infoString, $state ) = getInfoFromTree($globalASTRef,\%tags,0);
 	print $mapleFileHandle $infoString;
 
-	%tags = ( label  => "COVA", startTag => ";\#COVA ", endTag  => "\n", printHandle => $mapleFileHandle, routine => \&getArrayOfValues, subRoutine => \&getTagAndValueOrHashGeneral );
+	%tags = ( label  => "COVA", startTag => "\#COVA ", endTag  => "\n", printHandle => $mapleFileHandle, routine => \&getArrayOfValues, subRoutine => \&getTagAndValueOrHashGeneral );
 	( $infoString, $state ) = getInfoFromTree($globalASTRef,\%tags,0);
 	print $mapleFileHandle $infoString;
 	
-	%tags = ( label  => "EST", startTag => ";\#EST ", endTag  => "\n", separator => ' ', printHandle => $mapleFileHandle, routine => \&getArrayOfValues, subRoutine => \&getTagAndValueOrHashGeneral );
+	%tags = ( label  => "EST", startTag => "\#EST ", endTag  => "\n", separator => ' ', printHandle => $mapleFileHandle, routine => \&getArrayOfValues, subRoutine => \&getTagAndValueOrHashGeneral );
 	( $infoString, $state ) = getInfoFromTree($globalASTRef,\%tags,0);
 	print $mapleFileHandle $infoString;
 
-	%tags = ( label  => "SCAT", startTag => ";\#SCAT ", endTag  => "\n", printHandle => $mapleFileHandle, routine => \&getArrayOfValues, subRoutine => \&getTagAndValueOrHashGeneral );
+	%tags = ( label  => "SCAT", startTag => "\#SCAT ", endTag  => "\n", printHandle => $mapleFileHandle, routine => \&getArrayOfValues, subRoutine => \&getTagAndValueOrHashGeneral );
 	( $infoString, $state ) = getInfoFromTree($globalASTRef,\%tags,0);
 	print $mapleFileHandle $infoString;
 
@@ -9379,34 +9536,34 @@ maplePart2
 print $printHandle <<Sedaglovic;
 
 ##-----------------------------------------------------------------------------#
-;\##								     	System 
+\##								     	System 
 # Description 	: 
-;\# Result	:
-;\#
-;\#-----------------------------------------------------------------------------#
+\# Result	:
+\#
+\#-----------------------------------------------------------------------------#
 infolevel[observabilityTest] := 1 :
 infolevel[observabilitySymmetries] := 1 :
 t := 't':
-;\#-----------------------------------------------------------------------------#
-;\# Bibliography : see Monolix standard
-;\#-----------------------------------------------------------------------------#
-;\# We assume that diff(Variables[i],t) = VectorsField[i]
+\#-----------------------------------------------------------------------------#
+\# Bibliography : see Monolix standard
+\#-----------------------------------------------------------------------------#
+\# We assume that diff(Variables[i],t) = VectorsField[i]
 VectorField:= [
 	$vectorFieldExpressions
 ]:  
    	
-;\# We assume that OutputsVariables[i] = OutputSystem[i].
+\# We assume that OutputsVariables[i] = OutputSystem[i].
 OutputSystem := [
 	$outputExpressions
 ] :
 
-;\#-----------------------------------------------------------------------------#
+\#-----------------------------------------------------------------------------#
 OutputsVariables:= [$coStateVariables] 					:
 Inputs 		:= [$inputVariables] 					:
 Parameters 	:= [$parameters]					:
-;\# The variables have to be ordered as the vectors field.
+\# The variables have to be ordered as the vectors field.
 Variables 	:= [$stateVariables] 					:
-;\#-----------------------------------------------------------------------------#
+\#-----------------------------------------------------------------------------#
 NonObservable := observabilityTest(	VectorField	,
 					Variables	,
 					OutputSystem	,
@@ -9420,7 +9577,7 @@ GroupInfGen := observabilitySymmetries(	VectorField	,
 					Inputs		,
 					NonObservable		) :
 print(%) :
-;\#-----------------------------------------------------------------------------#
+\#-----------------------------------------------------------------------------#
 
 Sedaglovic
 
@@ -9590,34 +9747,39 @@ sub getWinbugsVersionOfVariable
 sub getNonmemVersionOfVariable 
 {
 	my $name = $_[0];
+	
 	my $outName = $name;
 	
-	my $baseVariable = substr($outName,0,length($outName)-1);
-	my $suffix       = substr($outName,-1);
-	
-	my $treeForThisVariableRef = $variablesWithNumericSuffixes{$baseVariable};
-	
-	if ( $treeForThisVariableRef )
+	if ( defined($outName) )
 	{
-		my $iOffsetForUseOf0 = getOffsetForPossibleUseOfZero($treeForThisVariableRef );
-		$suffix += $iOffsetForUseOf0;
-		$outName = getNonmemVersionOfBaseVariable($baseVariable);
-		$outName = $outName . $suffix;
+    	
+	    my $baseVariable = substr($outName,0,length($outName)-1);
+	    my $suffix       = substr($outName,-1);
+    	
+	    my $treeForThisVariableRef = $variablesWithNumericSuffixes{$baseVariable};
+    	
+	    if ( $treeForThisVariableRef )
+	    {
+		    my $iOffsetForUseOf0 = getOffsetForPossibleUseOfZero($treeForThisVariableRef );
+		    $suffix += $iOffsetForUseOf0;
+		    $outName = getNonmemVersionOfBaseVariable($baseVariable);
+		    $outName = $outName . $suffix;
 
-	}
-	elsif ( $outName =~ /\[|\(/)
-	{
-		$outName =~ s/\[(.*)\]/\($1\)/g;
-		$outName =~ s/\(t\)//g;
-		$outName =~ s/\,t//g;
+	    }
+	    elsif ( $outName =~ /\[|\(/)
+	    {
+		    $outName =~ s/\[(.*)\]/\($1\)/g;
+		    $outName =~ s/\(t\)//g;
+		    $outName =~ s/\,t//g;
 
-	}
-	elsif ( $outName =~ /TIME|DOSE/)
-	{
-	}
+	    }
+	    elsif ( $outName =~ /TIME|DOSE/)
+	    {
+	    }
 	
-	$outName =~ s/\./\_/g;
-
+	    $outName =~ s/\./\_/g;
+    }
+    
 	return ( $outName);
 }
 
